@@ -10,7 +10,7 @@ and private DNS scopes.
 
 ```hcl
 module "dns_zone" {
-  source = "github.com/moveeeax/terraform-oci-dns"
+  source = "github.com/moveeeax/terraform-oci-dns?ref=v1.0.0"
 
   compartment_id = var.compartment_id
   name           = "example.com"
@@ -39,7 +39,7 @@ resource "oci_dns_view" "internal" {
 }
 
 module "private_zone" {
-  source = "github.com/moveeeax/terraform-oci-dns"
+  source = "github.com/moveeeax/terraform-oci-dns?ref=v1.0.0"
 
   compartment_id = var.compartment_id
   name           = "internal.example.com"
@@ -60,7 +60,7 @@ external master to transfer from. OCI only accepts port `53`.
 
 ```hcl
 module "secondary_zone" {
-  source = "github.com/moveeeax/terraform-oci-dns"
+  source = "github.com/moveeeax/terraform-oci-dns?ref=v1.0.0"
 
   compartment_id = var.compartment_id
   name           = "example.com"
