@@ -42,3 +42,8 @@ output "dnssec_config" {
   description = "DNSSEC key versions for the zone. The ds_data of the active key-signing key must be published as a DS record in the parent zone, otherwise enabling DNSSEC has no effect."
   value       = oci_dns_zone.this.dnssec_config
 }
+
+output "record_fqdns" {
+  description = "Fully qualified domain name of each managed record set, keyed like var.records."
+  value       = { for k, r in oci_dns_rrset.this : k => r.domain }
+}

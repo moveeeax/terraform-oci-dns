@@ -58,3 +58,67 @@ resource "oci_dns_zone" "this" {
     }
   }
 }
+
+# Records. Each map entry becomes one oci_dns_rrset, which is authoritative for
+# its (domain, rtype) pair: it replaces every record of that type at that name,
+# including ones added outside Terraform.
+locals {
+  zone_name = lower(var.name)
+
+  # The part of the key before the first "/" is the record name when domain is
+  # not given: "@" (or nothing) is the zone apex, a relative name gets the zone
+  # appended, and a name that already ends in the zone is kept as is.
+  records = {
+    for k, r in var.records : k => {
+      domain = lower(r.domain != null ? r.domain : (
+        contains(["", "@"], split("/", k)[0]) ? local.zone_name : (
+          endswith(lower(split("/", k)[0]), ".${local.zone_name}") || lower(split("/", k)[0]) == local.zone_name
+          ? split("/", k)[0]
+          : "${split("/", k)[0]}.${local.zone_name}"
+        )
+      ))
+      rtype = upper(r.rtype)
+      ttl   = r.ttl
+      rdata = r.rdata
+    }
+  }
+}
+
+resource "oci_dns_rrset" "this" {
+  for_each = local.records
+
+  # The zone is addressed by OCID. compartment_id and scope are deprecated on
+  # this resource and are left unset; view_id is only meaningful for private
+  # zones and is null for global ones.
+  zone_name_or_id = oci_dns_zone.this.id
+  view_id         = var.view_id
+  domain          = each.value.domain
+  rtype           = each.value.rtype
+
+  dynamic "items" {
+    for_each = toset(each.value.rdata)
+    content {
+      domain = each.value.domain
+      rtype  = each.value.rtype
+      rdata  = items.value
+      ttl    = each.value.ttl
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.zone_type == "PRIMARY"
+      error_message = "records can only be managed in a PRIMARY zone; a SECONDARY zone takes its records from the external masters."
+    }
+
+    precondition {
+      condition     = each.value.domain == local.zone_name || endswith(each.value.domain, ".${local.zone_name}")
+      error_message = "records[\"${each.key}\"] resolves to domain \"${each.value.domain}\", which is outside the zone ${local.zone_name}."
+    }
+
+    precondition {
+      condition     = length([for k, r in local.records : k if r.domain == each.value.domain && r.rtype == each.value.rtype]) == 1
+      error_message = "More than one records entry resolves to ${each.value.domain} ${each.value.rtype}. An rrset is authoritative for a (domain, rtype) pair, so put all values for it in one entry's rdata list."
+    }
+  }
+}

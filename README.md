@@ -2,7 +2,7 @@
 
 Terraform module that manages an [Oracle Cloud Infrastructure](https://www.oracle.com/cloud/)
 DNS zone. It supports primary and secondary zones in both the global (internet-facing)
-and private DNS scopes.
+and private DNS scopes, and can manage the record sets of a primary zone.
 
 ## Usage
 
@@ -74,6 +74,35 @@ module "secondary_zone" {
 }
 ```
 
+### Records
+
+```hcl
+module "dns_zone" {
+  source = "github.com/moveeeax/terraform-oci-dns?ref=v1.0.0"
+
+  compartment_id = var.compartment_id
+  name           = "example.com"
+
+  records = {
+    "@/MX" = {
+      rtype = "MX"
+      rdata = ["10 mx1.example.net.", "20 mx2.example.net."]
+    }
+    "www/A" = {
+      rtype = "A"
+      ttl   = 60
+      rdata = ["192.0.2.10", "192.0.2.11"]
+    }
+    "_dmarc/TXT" = {
+      rtype = "TXT"
+      rdata = ["v=DMARC1; p=reject"]
+    }
+  }
+}
+```
+
+See [Records](#records-1) for how names are resolved.
+
 Runnable examples live in [`examples/`](examples).
 
 ## Constraints checked at plan time
@@ -91,6 +120,9 @@ fails instead:
 | `zone_type = "SECONDARY"` requires a non-empty `external_masters` | A secondary zone has nothing to transfer from otherwise. |
 | `zone_type = "PRIMARY"` requires an empty `external_masters` | A primary zone is authoritative and does not transfer from an external master. |
 | `dnssec_state = "ENABLED"` requires `scope = "GLOBAL"` | DNSSEC is not supported on private zones. |
+| `records` requires `zone_type = "PRIMARY"` | A secondary zone takes its records from the external masters. |
+| Every record resolves to a name inside the zone | A record outside the zone cannot be written to it. |
+| No two `records` entries resolve to the same name and type | Each entry is an authoritative rrset; two of them would overwrite each other on every apply. |
 
 ## DNSSEC
 
@@ -130,6 +162,7 @@ The test suite additionally requires Terraform (or OpenTofu) >= 1.7 for
 | `external_masters` | External master nameservers for `SECONDARY` zones. Only port `53` is accepted.                       | `list(object(...))` | `[]`        |    no    |
 | `freeform_tags`    | Free-form tags applied to the DNS zone.                                                              | `map(string)`       | `{}`        |    no    |
 | `defined_tags`     | Defined tags applied to the zone, keyed `namespace.key`.                                             | `map(string)`       | `{}`        |    no    |
+| `records`          | Record sets in the zone, keyed by a label (by convention `name/TYPE`). `PRIMARY` zones only.         | `map(object(...))`  | `{}`        |    no    |
 
 `external_masters` entries are objects of:
 
@@ -138,6 +171,15 @@ The test suite additionally requires Terraform (or OpenTofu) >= 1.7 for
 | `address`     | `string` |   yes    | The master server's IPv4 or IPv6 address. |
 | `port`        | `number` |    no    | OCI only accepts `53`; leave null to omit.|
 | `tsig_key_id` | `string` |    no    | OCID of the TSIG key.                     |
+
+`records` values are objects of:
+
+| Field    | Type           | Required | Notes                                                              |
+|----------|----------------|:--------:|--------------------------------------------------------------------|
+| `domain` | `string`       |    no    | FQDN without trailing dot. Defaults to the name taken from the key. |
+| `rtype`  | `string`       |   yes    | Record type (`A`, `AAAA`, `CNAME`, `MX`, `TXT`, ...).               |
+| `ttl`    | `number`       |    no    | Seconds, default `300`.                                            |
+| `rdata`  | `list(string)` |   yes    | One value per record; at least one, none empty.                    |
 
 ## Outputs
 
@@ -152,13 +194,34 @@ The test suite additionally requires Terraform (or OpenTofu) >= 1.7 for
 | `view_id`       | OCID of the private DNS view containing the zone; null for global zones.               |
 | `dnssec_state`  | State of DNSSEC on the zone.                                                           |
 | `dnssec_config` | DNSSEC key versions, including the `ds_data` to publish in the parent zone.             |
+| `record_fqdns`  | Resolved domain of each managed record set, keyed like `records`.                      |
 
-## Scope
+## Records
 
-This module manages the zone resource only. Records are managed separately with
-`oci_dns_rrset`, which is authoritative for a given (domain, rtype) pair — it
-replaces every record of that type at that name, so it is deliberately left
-outside this module rather than half-modelled here.
+`records` is a map; each entry becomes one `oci_dns_rrset` that targets the zone by
+OCID. An rrset is authoritative for its (domain, rtype) pair: it replaces every
+record of that type at that name, including records added in the Console or by
+another tool. Put all values for a name and type in one entry's `rdata` list.
+
+The map key is a free label, by convention `name/TYPE`. When `domain` is not set,
+the part of the key before the first `/` is the name:
+
+| Key            | Resolved domain (zone `example.com`) |
+|----------------|--------------------------------------|
+| `@/MX` or `/MX`| `example.com`                        |
+| `www/A`        | `www.example.com`                    |
+| `api.example.com/CNAME` | `api.example.com` (already in the zone) |
+| `www` with `domain = "web.example.com"` | `web.example.com` |
+
+`rtype` is upper-cased; `ttl` defaults to 300 seconds. Write `rdata` the way OCI
+stores it (for example a CNAME or MX target with its trailing dot): OCI normalises
+record data, and a value written differently can show up as a change on every
+plan. `record_fqdns` maps each key to the resolved name.
+
+The default `records = {}` creates no rrsets, so earlier configurations that manage
+records next to the module keep working. When moving such records into the module,
+remove the outside `oci_dns_rrset` for the same name and type, or use a `moved` /
+`import` block, so the two do not fight over the set.
 
 ## Development
 
