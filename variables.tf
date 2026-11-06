@@ -87,6 +87,47 @@ variable "external_masters" {
   }
 }
 
+variable "records" {
+  description = <<-EOT
+    Record sets to manage in the zone, keyed by a unique label, by convention "name/TYPE" (e.g. "www/A", "@/MX").
+    Each entry becomes one oci_dns_rrset, which is authoritative for its (domain, rtype) pair: it replaces every
+    record of that type at that name. domain defaults to the key's part before "/": "@" is the zone apex, a
+    relative name gets the zone appended, a name already ending in the zone is kept. Only valid for PRIMARY zones.
+  EOT
+  type = map(object({
+    domain = optional(string)
+    rtype  = string
+    ttl    = optional(number, 300)
+    rdata  = list(string)
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for r in values(var.records) : can(regex("^[A-Za-z0-9]+$", r.rtype))])
+    error_message = "records[*].rtype must be a DNS record type such as A, AAAA, CNAME, MX, TXT, CAA or SRV."
+  }
+
+  validation {
+    condition     = alltrue([for r in values(var.records) : r.ttl != null && r.ttl >= 1 && floor(r.ttl) == r.ttl])
+    error_message = "records[*].ttl must be a positive whole number of seconds."
+  }
+
+  validation {
+    condition     = alltrue([for r in values(var.records) : length(r.rdata) > 0 && alltrue([for d in r.rdata : trimspace(d) != ""])])
+    error_message = "records[*].rdata must list at least one non-empty value. An empty rrset would delete every record of that type at that name."
+  }
+
+  validation {
+    condition     = alltrue([for r in values(var.records) : r.domain == null || can(regex("^[A-Za-z0-9_*]([A-Za-z0-9_-]*[A-Za-z0-9])?(\\.[A-Za-z0-9_]([A-Za-z0-9_-]*[A-Za-z0-9])?)*$", coalesce(r.domain, "x")))])
+    error_message = "records[*].domain must be a fully qualified name without a trailing dot, e.g. \"www.example.com\"."
+  }
+
+  validation {
+    condition     = alltrue([for k in keys(var.records) : !can(regex("\\.$", split("/", k)[0]))])
+    error_message = "records keys must not end the name with a trailing dot; use \"www/A\" or set domain explicitly."
+  }
+}
+
 variable "freeform_tags" {
   description = "Free-form tags applied to the DNS zone."
   type        = map(string)
